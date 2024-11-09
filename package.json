@@ -14,5 +14,9 @@
   "type": "module",
   "workspaces": [
     "src/send_http_get_motoko_frontend"
-  ]
+  ],
+  "dependencies": {
+    "chart.js": "^4.4.6",
+    "react-chartjs-2": "^5.2.0"
+  }
 }

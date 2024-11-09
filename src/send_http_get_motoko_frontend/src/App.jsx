@@ -1,29 +1,128 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { send_http_get_motoko_backend } from 'declarations/send_http_get_motoko_backend';
+import { Line } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend
+} from 'chart.js';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend
+);
 
 function App() {
-  const [greeting, setGreeting] = useState('');
+  const [exchangeRate, setExchangeRate] = useState('Loading...');
+  const [priceHistory, setPriceHistory] = useState([]);
 
-  function handleSubmit(event) {
-    event.preventDefault();
-    const name = event.target.elements.name.value;
-    send_http_get_motoko_backend.greet(name).then((greeting) => {
-      setGreeting(greeting);
-    });
-    return false;
-  }
+  const chartOptions = {
+    responsive: true,
+    plugins: {
+      legend: {
+        position: 'top',
+      },
+      title: {
+        display: true,
+        text: 'ICP Price History',
+      },
+    },
+  };
+
+  const chartData = {
+    labels: priceHistory.map(([timestamp]) => 
+      new Date(Number(timestamp) / 1_000_000).toLocaleString()
+    ),
+    datasets: [
+      {
+        label: 'ICP Price (USD)',
+        data: priceHistory.map(([, price]) => price),
+        borderColor: 'rgb(75, 192, 192)',
+        tension: 0.1,
+      },
+    ],
+  };
+
+  // Function to fetch current exchange rate
+  const fetchExchangeRate = async () => {
+    try {
+      const response = await send_http_get_motoko_backend.get_icp_usd_exchange();
+      // Parse the response string into JSON
+      const data = JSON.parse(response);
+      if (data[0] && data[0][4]) { // Get the closing price
+        setExchangeRate(`$${data[0][4]}`);
+      }
+    } catch (error) {
+      setExchangeRate('Error fetching rate');
+      console.error(error);
+    }
+  };
+
+  // Function to fetch price history
+  const fetchPriceHistory = async () => {
+    try {
+      const history = await send_http_get_motoko_backend.getPriceHistory();
+      setPriceHistory(history);
+    } catch (error) {
+      console.error('Error fetching price history:', error);
+    }
+  };
+
+  // Fetch data on component mount and every minute
+  useEffect(() => {
+    fetchExchangeRate();
+    fetchPriceHistory();
+    
+    const interval = setInterval(() => {
+      fetchExchangeRate();
+      fetchPriceHistory();
+    }, 60000); // Update every minute
+
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <main>
       <img src="/logo2.svg" alt="DFINITY logo" />
-      <br />
-      <br />
-      <form action="#" onSubmit={handleSubmit}>
-        <label htmlFor="name">Enter your name: &nbsp;</label>
-        <input id="name" alt="Name" type="text" />
-        <button type="submit">Click Me!</button>
-      </form>
-      <section id="greeting">{greeting}</section>
+      <h1>ICP-USD Exchange Rate</h1>
+      
+      <div className="exchange-rate">
+        <h2>Current Rate: {exchangeRate}</h2>
+        <button onClick={fetchExchangeRate}>Refresh Rate</button>
+      </div>
+
+      <div className="price-history">
+        <h2>Price History</h2>
+        <div style={{ maxWidth: '800px', margin: '20px auto' }}>
+          <Line options={chartOptions} data={chartData} />
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Price (USD)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {priceHistory.map(([timestamp, price]) => (
+              <tr key={timestamp}>
+                <td>{new Date(Number(timestamp) / 1_000_000).toLocaleString()}</td>
+                <td>${price.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </main>
   );
 }
