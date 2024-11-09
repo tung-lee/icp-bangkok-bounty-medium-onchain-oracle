@@ -17,7 +17,7 @@ import Types "Types";
 actor {
 
     // Add state variables for time series storage
-    private stable var priceHistory : [(Nat64, Float)] = [];
+    private stable var priceHistory : [(Nat64, Text)] = [];
     private let MAX_HISTORY_LENGTH : Nat = 1000;  // Adjust as needed
 
     // Add timer functionality
@@ -25,14 +25,14 @@ actor {
     private let FETCH_INTERVAL : Nat64 = 60 * 1000_000_000;  // 1 minute in nanoseconds
 
     // Add method to store price data
-    private func storePriceData(timestamp : Nat64, price : Float) {
+    private func storePriceData(timestamp : Nat64, price : Text) {
         priceHistory := Array.append(
             priceHistory,
             [(timestamp, price)]
         );
         
         if (priceHistory.size() > MAX_HISTORY_LENGTH) {
-            let newHistory = Array.init<(Nat64, Float)>(MAX_HISTORY_LENGTH, (0, 0));
+            let newHistory = Array.init<(Nat64, Text)>(MAX_HISTORY_LENGTH, (0, ""));
             let startIndex = priceHistory.size() - MAX_HISTORY_LENGTH;
             
             var j = 0;
@@ -46,7 +46,7 @@ actor {
     };
 
     // Add query method to get historical data
-    public query func getPriceHistory() : async [(Nat64, Float)] {
+    public query func getPriceHistory() : async [(Nat64, Text)] {
         priceHistory
     };
 
@@ -140,11 +140,40 @@ actor {
             case (?y) { y };
         };
 
-        // Parse the decoded_text to extract price and store it
-        // Note: You'll need to add proper JSON parsing here
-        // This is a simplified example
+        // Extract just the price from the decoded text
+        // The format is [[timestamp,low,high,open,close,volume]]
+        let price = switch (decoded_text) {
+            case text {
+                if (Text.size(text) == 0) { "0.0" }
+                else {
+                    let cleanText = Text.trim(text, #text "[]");
+                    let parts = Text.split(cleanText, #text ",");
+                    
+                    // Try to get to the close price (5th element)
+                    var count = 0;
+                    var closePrice = "0.0";
+                    
+                    label l loop {
+                        switch (parts.next()) {
+                            case (?value) {
+                                if (count == 4) {  // 5th element (close price)
+                                    closePrice := Text.trim(value, #text " ");
+                                    break l;
+                                };
+                                count += 1;
+                            };
+                            case (null) {
+                                break l;
+                            };
+                        };
+                    };
+                    closePrice
+                };
+            };
+        };
+
         let currentTime = Nat64.fromNat(Int.abs(Time.now()));
-        storePriceData(currentTime, 0.0); // Replace 0.0 with actual parsed price
+        storePriceData(currentTime, price);
 
         //6. RETURN RESPONSE OF THE BODY
         //The API response will looks like this:
@@ -162,7 +191,7 @@ actor {
         //         243.5678 <-- volume
         //     ],
         // ]
-        decoded_text
+        price
     };
 
     //7. CREATE TRANSFORM FUNCTION

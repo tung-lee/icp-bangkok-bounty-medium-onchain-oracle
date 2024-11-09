@@ -57,11 +57,8 @@ function App() {
   const fetchExchangeRate = async () => {
     try {
       const response = await send_http_get_motoko_backend.get_icp_usd_exchange();
-      // Parse the response string into JSON
-      const data = JSON.parse(response);
-      if (data[0] && data[0][4]) { // Get the closing price
-        setExchangeRate(`$${data[0][4]}`);
-      }
+      // The response is now directly the price string
+      setExchangeRate(`$${response}`);
     } catch (error) {
       setExchangeRate('Error fetching rate');
       console.error(error);
@@ -117,7 +114,7 @@ function App() {
             {priceHistory.map(([timestamp, price]) => (
               <tr key={timestamp}>
                 <td>{new Date(Number(timestamp) / 1_000_000).toLocaleString()}</td>
-                <td>${price.toFixed(2)}</td>
+                <td>${price}</td>
               </tr>
             ))}
           </tbody>
