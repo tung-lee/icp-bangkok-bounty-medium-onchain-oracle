@@ -1,0 +1,26 @@
+{
+  "canisters": {
+    "send_http_get_motoko_backend": {
+      "main": "src/send_http_get_motoko_backend/main.mo",
+      "type": "motoko"
+    },
+    "send_http_get_motoko_frontend": {
+      "dependencies": [
+        "send_http_get_motoko_backend"
+      ],
+      "source": [
+        "src/send_http_get_motoko_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "send_http_get_motoko_frontend"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
