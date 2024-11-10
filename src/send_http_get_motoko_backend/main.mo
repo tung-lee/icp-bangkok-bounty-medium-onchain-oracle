@@ -1,227 +1,128 @@
-import Debug "mo:base/Debug";
 import Blob "mo:base/Blob";
-import Cycles "mo:base/ExperimentalCycles";
-import Error "mo:base/Error";
-import Array "mo:base/Array";
-import Nat8 "mo:base/Nat8";
-import Nat64 "mo:base/Nat64";
+import ExperimentalCycles "mo:base/ExperimentalCycles";
 import Text "mo:base/Text";
+import Array "mo:base/Array";
+import Timer "mo:base/Timer";
 import Time "mo:base/Time";
-import Int "mo:base/Int";
-
-//import the custom types you have in Types.mo
 import Types "Types";
+import Debug "mo:base/Debug";
+import Error "mo:base/Error";
 
-
-//Actor
 actor {
+  type CryptoQuote = {
+    rawJson: Text;
+    captureTime: Int;
+  };
 
-    // Add state variables for time series storage
-    private stable var priceHistory : [(Nat64, Text)] = [];
-    private let MAX_HISTORY_LENGTH : Nat = 1000;  // Adjust as needed
+  private stable var quoteArchive: [CryptoQuote] = [];
+  private stable var monitorRunning: Bool = false;
+  private stable var latestFetchTime: Int = 0;
+  private let API_CYCLE_AMOUNT = 35_000_000_000;
+  private let REFRESH_SECONDS = 1800; // 30 minutes
+  private let SYSTEM_CANISTER = "aaaaa-aa";
 
-    // Add timer functionality
-    private stable var timer_id : Nat = 0;
-    private let FETCH_INTERVAL : Nat64 = 60 * 1000_000_000;  // 1 minute in nanoseconds
+  system func heartbeat() : async () {
+    if (not monitorRunning) {
+      Debug.print("Starting quote monitor");
+      monitorRunning := true;
+      ignore await fetchCryptoQuote();
+    };
+  };
 
-    // Add method to store price data
-    private func storePriceData(timestamp : Nat64, price : Text) {
-        priceHistory := Array.append(
-            priceHistory,
-            [(timestamp, price)]
-        );
-        
-        if (priceHistory.size() > MAX_HISTORY_LENGTH) {
-            let newHistory = Array.init<(Nat64, Text)>(MAX_HISTORY_LENGTH, (0, ""));
-            let startIndex = priceHistory.size() - MAX_HISTORY_LENGTH;
-            
-            var j = 0;
-            while (j < MAX_HISTORY_LENGTH) {
-                newHistory[j] := priceHistory[startIndex + j];
-                j += 1;
-            };
-            
-            priceHistory := Array.freeze(newHistory);
-        };
+  public query func monitorStatus() : async {
+    isRunning: Bool;
+    lastFetch: Int;
+    archiveLength: Nat;
+    availableCycles: Nat;
+  } {
+    {
+      isRunning = monitorRunning;
+      lastFetch = latestFetchTime;
+      archiveLength = quoteArchive.size();
+      availableCycles = ExperimentalCycles.balance();
+    }
+  };
+
+  public shared func triggerManualFetch() : async Text {
+    Debug.print("Manual fetch initiated");
+    await fetchCryptoQuote()
+  };
+
+  public query func getQuoteArchive() : async [CryptoQuote] {
+    quoteArchive;
+  };
+
+  public query func transform(input : Types.TransformArgs) : async Types.CanisterHttpResponsePayload {
+    {
+      status = input.response.status;
+      body = input.response.body;
+      headers = [
+        { name = "Content-Security-Policy"; value = "default-src 'self'" },
+        { name = "Referrer-Policy"; value = "strict-origin" },
+        { name = "Permissions-Policy"; value = "geolocation=(self)" },
+        { name = "Strict-Transport-Security"; value = "max-age=63072000" },
+        { name = "X-Frame-Options"; value = "DENY" },
+        { name = "X-Content-Type-Options"; value = "nosniff" },
+      ];
+    };
+  };
+
+  private func fetchCryptoQuote() : async Text {
+    Debug.print("Initiating quote fetch");
+    Debug.print("Cycle balance: " # debug_show(ExperimentalCycles.balance()));
+    
+    let systemCanister : Types.ExternalService = actor(SYSTEM_CANISTER);
+    let apiEndpoint = "api.coinbase.com";
+    
+    let requestConfig : Types.HttpRequestArgs = {
+      url = "https://" # apiEndpoint # "/v2/prices/ICP-USD/spot";
+      max_response_bytes = null;
+      headers = [
+        { name = "Host"; value = apiEndpoint # ":443" },
+        { name = "User-Agent"; value = "crypto_quote_monitor" },
+      ];
+      body = null;
+      method = #get;
+      transform = ?{
+        function = transform;
+        context = Blob.fromArray([]);
+      };
     };
 
-    // Add query method to get historical data
-    public query func getPriceHistory() : async [(Nat64, Text)] {
-        priceHistory
+    ExperimentalCycles.add<system>(API_CYCLE_AMOUNT);
+    
+    try {
+      let apiResponse = await systemCanister.http_request(requestConfig);
+      
+      let quoteData = switch (Text.decodeUtf8(Blob.fromArray(apiResponse.body))) {
+        case null { 
+          Debug.print("Quote decoding failed");
+          throw Error.reject("Unable to decode quote data") 
+        };
+        case (?value) {
+          quoteArchive := Array.append<CryptoQuote>(
+            quoteArchive, 
+            [{
+              rawJson = value;
+              captureTime = Time.now();
+            }]
+          );
+          latestFetchTime := Time.now();
+          value;
+        };
+      };
+      quoteData;
+    } catch (e) {
+      let errorMsg = Error.message(e);
+      Debug.print("API request failed: " # errorMsg);
+      throw Error.reject("Failed to fetch quote: " # errorMsg);
     };
+  };
 
-    //This method sends a GET request to a URL with a free API you can test.
-    //This method returns Coinbase data on the exchange rate between USD and ICP
-    //for a certain day.
-    //The API response looks like this:
-    //  [
-    //     [
-    //         1682978460, <-- start timestamp
-    //         5.714, <-- lowest price during time range
-    //         5.718, <-- highest price during range
-    //         5.714, <-- price at open
-    //         5.714, <-- price at close
-    //         243.5678 <-- volume of ICP traded
-    //     ],
-    // ]
+  private func scheduleNextFetch(): async() {
+    Debug.print("Executing scheduled fetch");
+    ignore fetchCryptoQuote();
+  };
 
-    public func get_icp_usd_exchange() : async Text {
-
-        //1. DECLARE MANAGEMENT CANISTER
-        //You need this so you can use it to make the HTTP request
-        let ic : Types.IC = actor ("aaaaa-aa");
-
-        //2. SETUP ARGUMENTS FOR HTTP GET request
-
-        // 2.1 Setup the URL and its query parameters
-        let ONE_MINUTE : Nat64 = 60;
-        let current_time = Nat64.fromNat(Int.abs(Time.now()));
-        let start_timestamp : Types.Timestamp = current_time - ONE_MINUTE; // 1 minute ago
-        let end_timestamp : Types.Timestamp = current_time;
-        let host : Text = "api.exchange.coinbase.com";
-        let url = "https://" # host # "/products/ICP-USD/candles?start=" # Nat64.toText(start_timestamp) # "&end=" # Nat64.toText(end_timestamp) # "&granularity=" # Nat64.toText(ONE_MINUTE);
-
-        // 2.2 prepare headers for the system http_request call
-        let request_headers = [
-            { name = "Host"; value = host # ":443" },
-            { name = "User-Agent"; value = "exchange_rate_canister" },
-        ];
-
-        // 2.2.1 Transform context
-        let transform_context : Types.TransformContext = {
-            function = transform;
-            context = Blob.fromArray([]);
-        };
-
-        // 2.3 The HTTP request
-        let http_request : Types.HttpRequestArgs = {
-            url = url;
-            max_response_bytes = null; //optional for request
-            headers = request_headers;
-            body = null; //optional for request
-            method = #get;
-            transform = ?transform_context;
-        };
-
-        //3. ADD CYCLES TO PAY FOR HTTP REQUEST
-
-        //The IC specification spec says, "Cycles to pay for the call must be explicitly transferred with the call"
-        //The management canister will make the HTTP request so it needs cycles
-        //See: /docs/current/motoko/main/canister-maintenance/cycles
-
-        //The way Cycles.add() works is that it adds those cycles to the next asynchronous call
-        //"Function add(amount) indicates the additional amount of cycles to be transferred in the next remote call"
-        //See: /docs/current/references/ic-interface-spec#ic-http_request
-        Cycles.add(20_949_972_000);
-
-        //4. MAKE HTTP REQUEST AND WAIT FOR RESPONSE
-        //Since the cycles were added above, you can just call the management canister with HTTPS outcalls below
-        let http_response : Types.HttpResponsePayload = await ic.http_request(http_request);
-
-        //5. DECODE THE RESPONSE
-
-        //As per the type declarations in `src/Types.mo`, the BODY in the HTTP response
-        //comes back as [Nat8s] (e.g. [2, 5, 12, 11, 23]). Type signature:
-
-        //public type HttpResponsePayload = {
-        //     status : Nat;
-        //     headers : [HttpHeader];
-        //     body : [Nat8];
-        // };
-
-        //You need to decode that [Nat8] array that is the body into readable text.
-        //To do this, you:
-        //  1. Convert the [Nat8] into a Blob
-        //  2. Use Blob.decodeUtf8() method to convert the Blob to a ?Text optional
-        //  3. You use a switch to explicitly call out both cases of decoding the Blob into ?Text
-        let response_body: Blob = Blob.fromArray(http_response.body);
-        let decoded_text: Text = switch (Text.decodeUtf8(response_body)) {
-            case (null) { "No value returned" };
-            case (?y) { y };
-        };
-
-        // Extract just the price from the decoded text
-        // The format is [[timestamp,low,high,open,close,volume]]
-        let price = switch (decoded_text) {
-            case text {
-                if (Text.size(text) == 0) { "0.0" }
-                else {
-                    let cleanText = Text.trim(text, #text "[]");
-                    let parts = Text.split(cleanText, #text ",");
-                    
-                    // Try to get to the close price (5th element)
-                    var count = 0;
-                    var closePrice = "0.0";
-                    
-                    label l loop {
-                        switch (parts.next()) {
-                            case (?value) {
-                                if (count == 4) {  // 5th element (close price)
-                                    closePrice := Text.trim(value, #text " ");
-                                    break l;
-                                };
-                                count += 1;
-                            };
-                            case (null) {
-                                break l;
-                            };
-                        };
-                    };
-                    closePrice
-                };
-            };
-        };
-
-        let currentTime = Nat64.fromNat(Int.abs(Time.now()));
-        storePriceData(currentTime, price);
-
-        //6. RETURN RESPONSE OF THE BODY
-        //The API response will looks like this:
-
-        // ("[[1682978460,5.714,5.718,5.714,5.714,243.5678]]")
-
-        //Which can be formatted as this
-        //  [
-        //     [
-        //         1682978460, <-- start/timestamp
-        //         5.714, <-- low
-        //         5.718, <-- high
-        //         5.714, <-- open
-        //         5.714, <-- close
-        //         243.5678 <-- volume
-        //     ],
-        // ]
-        price
-    };
-
-    //7. CREATE TRANSFORM FUNCTION
-    public query func transform(raw : Types.TransformArgs) : async Types.CanisterHttpResponsePayload {
-        let transformed : Types.CanisterHttpResponsePayload = {
-            status = raw.response.status;
-            body = raw.response.body;
-            headers = [
-                {
-                    name = "Content-Security-Policy";
-                    value = "default-src 'self'";
-                },
-                { name = "Referrer-Policy"; value = "strict-origin" },
-                { name = "Permissions-Policy"; value = "geolocation=(self)" },
-                {
-                    name = "Strict-Transport-Security";
-                    value = "max-age=63072000";
-                },
-                { name = "X-Frame-Options"; value = "DENY" },
-                { name = "X-Content-Type-Options"; value = "nosniff" },
-            ];
-        };
-        transformed;
-    };
-
-    // Add system function to start timer
-    system func timer(setGlobalTimer : Nat64 -> ()) : async () {
-        // Set up next timer call
-        setGlobalTimer(FETCH_INTERVAL);
-        // Fetch new price data
-        ignore get_icp_usd_exchange();
-    };
+  ignore Timer.recurringTimer<system>(#seconds REFRESH_SECONDS, scheduleNextFetch);
 };

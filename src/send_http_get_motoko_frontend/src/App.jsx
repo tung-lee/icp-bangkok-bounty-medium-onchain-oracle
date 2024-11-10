@@ -56,9 +56,10 @@ function App() {
   // Function to fetch current exchange rate
   const fetchExchangeRate = async () => {
     try {
-      const response = await send_http_get_motoko_backend.get_icp_usd_exchange();
-      // The response is now directly the price string
-      setExchangeRate(`$${response}`);
+      const response = await send_http_get_motoko_backend.triggerManualFetch();
+      const data = JSON.parse(response);
+      const price = data.data.amount;
+      setExchangeRate(`$${price}`);
     } catch (error) {
       setExchangeRate('Error fetching rate');
       console.error(error);
@@ -68,7 +69,11 @@ function App() {
   // Function to fetch price history
   const fetchPriceHistory = async () => {
     try {
-      const history = await send_http_get_motoko_backend.getPriceHistory();
+      const archive = await send_http_get_motoko_backend.getQuoteArchive();
+      const history = archive.map(entry => {
+        const data = JSON.parse(entry.rawJson);
+        return [entry.captureTime, Number(data.data.amount)];
+      });
       setPriceHistory(history);
     } catch (error) {
       console.error('Error fetching price history:', error);

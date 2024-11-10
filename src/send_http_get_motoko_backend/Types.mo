@@ -1,16 +1,9 @@
-module Types {
-
-  public type Timestamp = Nat64;
-
-  //1. Type that describes the Request arguments for an HTTPS outcall
-    //See: /docs/current/references/ic-interface-spec#ic-http_request
-    public type HttpRequestArgs = {
-        url : Text;
-        max_response_bytes : ?Nat64;
-        headers : [HttpHeader];
-        body : ?[Nat8];
-        method : HttpMethod;
-        transform : ?TransformRawResponseFunction;
+module {
+    // HTTP Request related types
+    public type HttpMethod = {
+        #get;
+        #post;
+        #head;
     };
 
     public type HttpHeader = {
@@ -18,54 +11,37 @@ module Types {
         value : Text;
     };
 
-    public type HttpMethod = {
-        #get;
-        #post;
-        #head;
+    public type HttpRequestArgs = {
+        url : Text;
+        max_response_bytes : ?Nat64;
+        headers : [HttpHeader];
+        body : ?[Nat8];
+        method : HttpMethod;
+        transform : ?TransformContext;
     };
 
+    // HTTP Response related types
     public type HttpResponsePayload = {
         status : Nat;
         headers : [HttpHeader];
         body : [Nat8];
     };
 
-    //2. HTTPS outcalls have an optional "transform" key. These two types help describe it.
-    //"The transform function may, for example, transform the body in any way, add or remove headers,
-    //modify headers, etc. "
-    //See: /docs/current/references/ic-interface-spec#ic-http_request
+    public type CanisterHttpResponsePayload = HttpResponsePayload;
 
-
-    //2.1 This type describes a function called "TransformRawResponse" used in line 14 above
-    //"If provided, the calling canister itself must export this function."
-    //In this minimal example for a `GET` request, you declare the type for completeness, but
-    //you do not use this function. You will pass "null" to the HTTP request.
-    public type TransformRawResponseFunction = {
-        function : shared query TransformArgs -> async HttpResponsePayload;
-        context : Blob;
-    };
-
-    //2.2 These types describes the arguments the transform function needs
+    // Transform related types
     public type TransformArgs = {
         response : HttpResponsePayload;
         context : Blob;
     };
 
-    public type CanisterHttpResponsePayload = {
-        status : Nat;
-        headers : [HttpHeader];
-        body : [Nat8];
-    };
-
     public type TransformContext = {
-        function : shared query TransformArgs -> async HttpResponsePayload;
+        function : shared query TransformArgs -> async CanisterHttpResponsePayload;
         context : Blob;
     };
 
-
-    //3. Declaring the management canister which you use to make the HTTPS outcall
-    public type IC = actor {
-        http_request : HttpRequestArgs -> async HttpResponsePayload;
+    // External service interface
+    public type ExternalService = actor {
+        http_request : shared HttpRequestArgs -> async HttpResponsePayload;
     };
-
 }
